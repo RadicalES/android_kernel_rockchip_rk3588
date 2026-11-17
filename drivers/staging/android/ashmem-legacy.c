@@ -23,6 +23,7 @@
 #include <linux/personality.h>
 #include <linux/bitops.h>
 #include <linux/mutex.h>
+#include <linux/sched/mm.h>
 #include <linux/shmem_fs.h>
 #include "ashmem.h"
 
@@ -363,6 +364,17 @@ static int ashmem_vmfile_mmap(struct file *file, struct vm_area_struct *vma)
 	return -EPERM;
 }
 
+/*
+ * In 6.18 mm_get_unmapped_area() still takes the mm (mainline dropped it
+ * later), so it cannot be the f_op itself.
+ */
+static unsigned long ashmem_vmfile_get_unmapped_area(struct file *file,
+		unsigned long addr, unsigned long len, unsigned long pgoff,
+		unsigned long flags)
+{
+	return mm_get_unmapped_area(current->mm, file, addr, len, pgoff, flags);
+}
+
 static int ashmem_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	static struct file_operations vmfile_fops;
@@ -400,7 +412,7 @@ static int ashmem_mmap(struct file *file, struct vm_area_struct *vma)
 			name = asma->name;
 
 		/* ... and allocate the backing shmem file */
-		vmfile = shmem_file_setup(name, asma->size, vma->flags);
+		vmfile = shmem_file_setup(name, asma->size, vma->vm_flags);
 		if (IS_ERR(vmfile)) {
 			ret = PTR_ERR(vmfile);
 			goto out;
@@ -418,7 +430,7 @@ static int ashmem_mmap(struct file *file, struct vm_area_struct *vma)
 		if (!vmfile_fops.mmap) {
 			vmfile_fops = *vmfile->f_op;
 			vmfile_fops.mmap = ashmem_vmfile_mmap;
-			vmfile_fops.get_unmapped_area =	mm_get_unmapped_area;
+			vmfile_fops.get_unmapped_area = ashmem_vmfile_get_unmapped_area;
 		}
 		vmfile->f_op = &vmfile_fops;
 	}
@@ -921,7 +933,7 @@ static void ashmem_show_fdinfo(struct seq_file *m, struct file *file)
 	mutex_lock(&ashmem_mutex);
 
 	if (asma->file)
-		seq_printf(m, "inode:\t%lld\n", file_inode(asma->file)->i_ino);
+		seq_printf(m, "inode:\t%lu\n", file_inode(asma->file)->i_ino);
 
 	if (asma->name[ASHMEM_NAME_PREFIX_LEN] != '\0')
 		seq_printf(m, "name:\t%s\n",
