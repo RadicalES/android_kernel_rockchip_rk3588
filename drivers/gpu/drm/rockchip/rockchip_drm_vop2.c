@@ -1002,6 +1002,7 @@ static int vop2_plane_atomic_check(struct drm_plane *plane,
 	struct vop2_video_port *vp;
 	struct vop2 *vop2;
 	const struct vop2_data *vop2_data;
+	struct vop2_win *win = to_vop2_win(plane);
 	struct drm_rect *dest = &pstate->dst;
 	struct drm_rect *src = &pstate->src;
 	int min_scale = FRAC_16_16(1, 8);
@@ -1057,6 +1058,21 @@ static int vop2_plane_atomic_check(struct drm_plane *plane,
 	 */
 	if (fb->format->is_yuv && ((pstate->src.x1 >> 16) % 2)) {
 		drm_dbg_kms(vop2->drm, "Invalid Source: Yuv format not support odd xpos\n");
+		return -EINVAL;
+	}
+
+	/*
+	 * Cluster windows only rotate by 90/270 degrees or mirror horizontally
+	 * in their AFBC decoder. A linear buffer is fetched with the rotated
+	 * size but without the rotation, the window underflows (POST_BUF_EMPTY)
+	 * and the output goes black.
+	 */
+	if (vop2_cluster_window(win) && !rockchip_afbc(plane, fb->modifier) &&
+	    (pstate->rotation & (DRM_MODE_REFLECT_X | DRM_MODE_ROTATE_90 |
+				 DRM_MODE_ROTATE_270))) {
+		drm_dbg_kms(vop2->drm,
+			    "%s: rotation 0x%x needs an AFBC buffer\n",
+			    win->data->name, pstate->rotation);
 		return -EINVAL;
 	}
 
