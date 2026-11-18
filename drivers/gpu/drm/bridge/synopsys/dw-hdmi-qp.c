@@ -1032,12 +1032,18 @@ static void dw_hdmi_qp_init_hw(struct dw_hdmi_qp *hdmi)
 		hdmi->phy.ops->setup_hpd(hdmi, hdmi->phy.data);
 }
 
+static void dw_hdmi_qp_put_ddc(void *ddc)
+{
+	i2c_put_adapter(ddc);
+}
+
 struct dw_hdmi_qp *dw_hdmi_qp_bind(struct platform_device *pdev,
 				   struct drm_encoder *encoder,
 				   const struct dw_hdmi_qp_plat_data *plat_data)
 {
 	struct device *dev = &pdev->dev;
 	struct dw_hdmi_qp *hdmi;
+	struct device_node *ddc_node;
 	void __iomem *regs;
 	int ret;
 
@@ -1087,9 +1093,28 @@ struct dw_hdmi_qp *dw_hdmi_qp_bind(struct platform_device *pdev,
 	hdmi->bridge.vendor = "Synopsys";
 	hdmi->bridge.product = "DW HDMI QP TX";
 
-	hdmi->bridge.ddc = dw_hdmi_qp_i2c_adapter(hdmi);
-	if (IS_ERR(hdmi->bridge.ddc))
-		return ERR_CAST(hdmi->bridge.ddc);
+	/*
+	 * The internal I2C master only does EDID-style register reads, not the
+	 * multi-byte transfers DDC/CI needs. A board can route the DDC lines to
+	 * a general-purpose I2C adapter instead (e.g. i2c-gpio on the same pins)
+	 * and name it with ddc-i2c-bus, as with dw-hdmi.
+	 */
+	ddc_node = of_parse_phandle(dev->of_node, "ddc-i2c-bus", 0);
+	if (ddc_node) {
+		hdmi->bridge.ddc = of_get_i2c_adapter_by_node(ddc_node);
+		of_node_put(ddc_node);
+		if (!hdmi->bridge.ddc)
+			return ERR_PTR(-EPROBE_DEFER);
+
+		ret = devm_add_action_or_reset(dev, dw_hdmi_qp_put_ddc,
+					       hdmi->bridge.ddc);
+		if (ret)
+			return ERR_PTR(ret);
+	} else {
+		hdmi->bridge.ddc = dw_hdmi_qp_i2c_adapter(hdmi);
+		if (IS_ERR(hdmi->bridge.ddc))
+			return ERR_CAST(hdmi->bridge.ddc);
+	}
 
 	hdmi->bridge.hdmi_audio_max_i2s_playback_channels = 8;
 	hdmi->bridge.hdmi_audio_dev = dev;
