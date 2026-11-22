@@ -32,6 +32,11 @@ int rocket_core_init(struct rocket_core *core)
 	if (err)
 		return dev_err_probe(dev, err, "failed to get clocks for core %d\n", core->index);
 
+	core->npu_clk = devm_clk_get(dev, "npu");
+	if (IS_ERR(core->npu_clk))
+		return dev_err_probe(dev, PTR_ERR(core->npu_clk),
+				     "failed to get npu clock for core %d\n", core->index);
+
 	core->pc_iomem = devm_platform_ioremap_resource_byname(pdev, "pc");
 	if (IS_ERR(core->pc_iomem)) {
 		dev_err(dev, "couldn't find PC registers %ld\n", PTR_ERR(core->pc_iomem));

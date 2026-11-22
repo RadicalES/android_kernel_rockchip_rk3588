@@ -231,6 +231,50 @@ static int find_core_for_dev(struct device *dev)
 	return -1;
 }
 
+/*
+ * On the RK3588, TF-A makes NPU rates above 200 MHz with a PVTPLL inside the
+ * NPU power domain, so they can only be set while the NPU is powered, and the
+ * clock has to be back on the always-available 200 MHz before it powers down.
+ * The device tree's assigned rate is applied before the domain is up, which
+ * hangs the SoC for a PVTPLL rate.
+ */
+static unsigned int npu_rate_mhz;
+module_param(npu_rate_mhz, uint, 0644);
+MODULE_PARM_DESC(npu_rate_mhz, "NPU clock in MHz while powered (0: keep the device tree rate)");
+
+#define ROCKET_IDLE_NPU_RATE	200000000UL
+
+static void rocket_npu_clk_up(struct rocket_device *rdev, struct rocket_core *core)
+{
+	unsigned int mhz = READ_ONCE(npu_rate_mhz);
+	int err;
+
+	mutex_lock(&rdev->clk_lock);
+	if (rdev->powered_cores++ == 0 && mhz) {
+		err = clk_set_rate(core->npu_clk, mhz * 1000000UL);
+		if (err)
+			dev_warn(core->dev, "failed to set NPU clock to %u MHz: %d\n", mhz, err);
+		else
+			rdev->npu_clk_raised = true;
+	}
+	mutex_unlock(&rdev->clk_lock);
+}
+
+static void rocket_npu_clk_down(struct rocket_device *rdev, struct rocket_core *core)
+{
+	int err;
+
+	mutex_lock(&rdev->clk_lock);
+	if (--rdev->powered_cores == 0 && rdev->npu_clk_raised) {
+		err = clk_set_rate(core->npu_clk, ROCKET_IDLE_NPU_RATE);
+		if (err)
+			dev_warn(core->dev, "failed to restore NPU clock: %d\n", err);
+		else
+			rdev->npu_clk_raised = false;
+	}
+	mutex_unlock(&rdev->clk_lock);
+}
+
 static int rocket_device_runtime_resume(struct device *dev)
 {
 	struct rocket_device *rdev = dev_get_drvdata(dev);
@@ -246,6 +290,8 @@ static int rocket_device_runtime_resume(struct device *dev)
 		return err;
 	}
 
+	rocket_npu_clk_up(rdev, &rdev->cores[core]);
+
 	return 0;
 }
 
@@ -259,6 +305,8 @@ static int rocket_device_runtime_suspend(struct device *dev)
 
 	if (!rocket_job_is_idle(&rdev->cores[core]))
 		return -EBUSY;
+
+	rocket_npu_clk_down(rdev, &rdev->cores[core]);
 
 	clk_bulk_disable_unprepare(ARRAY_SIZE(rdev->cores[core].clks), rdev->cores[core].clks);
 

@@ -17,6 +17,11 @@ struct rocket_device {
 
 	struct mutex sched_lock;
 
+	/* Cores powered up, and whether the NPU clock was raised for them */
+	struct mutex clk_lock;
+	unsigned int powered_cores;
+	bool npu_clk_raised;
+
 	struct rocket_core *cores;
 	unsigned int num_cores;
 	unsigned int max_cores;
